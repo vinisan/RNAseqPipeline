@@ -1,0 +1,163 @@
+---
+title: "DESeq2"
+author: "Vineet"
+date: "February 25, 2016"
+output: html_document
+---
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+<style type="text/css">
+.main-container {
+max-width: 1500px;
+}
+</style>
+ 
+```{r global_options, include=FALSE, echo=F}
+knitr::opts_chunk$set(tidy=T, comment="", collapse=T, warning=FALSE, message=FALSE)
+```
+
+```{r libraries, warnings = FALSE}
+library(DESeq2)
+library(dplyr)
+```
+
+DESeq analysis using counts from kallisto
+
+```{r DESeq_Analysis}
+
+# Import countdata
+countData = read.csv("AllRNAseq.tsv", row.names=1, skip =1, sep = "\t", header = T) %>% as.matrix()
+CellLinesIndex<-read.csv("AllRNAseq.tsv", row.names=1, sep = "\t", nrow = 1, header = F)
+
+# Filter data where you only have 0 or 1 read count across all samples.
+countData = countData[rowSums(countData)>1, ]
+head(countData)
+condition<-CellLines[1:8]
+samples <- data.frame(row.names=c("E1", "E2", "E3", "E4","MG1", "MG2", "MG3","MG4"), condition=as.factor(c("E", "E", "E","E","MG","MG","MG","MG")))
+EMGData<-countData[,c(1:4,9:12)]
+
+removeData<-t(apply(EMGData, 1, as.integer))
+rownames(removeData)<-rownames(EMGData)
+# Set up the DESeqDataSet Object and run the DESeq pipeline
+dds = DESeqDataSetFromMatrix(countData=as.matrix(removeData),
+                             colData  = samples,
+                              design= ~condition)
+dds = DESeq(dds)
+dds
+#Get DegResults
+DegResEMG = results(dds, contrast=c("condition", "E", "MG"))
+DegResEMG = DegResEMG[order(DegResEMG$pvalue),]
+summary(DegResEMG)
+
+```
+
+Mapping ENTREZ and othr IDs to 
+```{r DESeq_MapIDS}
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+columns(org.Hs.eg.db)
+#Using mapIds function to add columns to the DegResults
+
+DegResEMG$symbol = mapIds(org.Hs.eg.db,
+                     keys=row.names(DegResEMG), 
+                     column="SYMBOL",
+                     keytype="ENSEMBLTRANS",
+                     multiVals="first")
+DegResEMG$entrez = mapIds(org.Hs.eg.db,
+                     keys=row.names(DegResEMG), 
+                     column="ENTREZID",
+                     keytype="ENSEMBLTRANS",
+                     multiVals="first")
+DegResEMG$name =   mapIds(org.Hs.eg.db,
+                     keys=row.names(DegResEMG), 
+                     column="GENENAME",
+                     keytype="ENSEMBLTRANS",
+                     multiVals="first")
+
+head(DegResEMG, 10)
+
+```
+
+Converting the gene expDegRession for KEGG pathway analysis
+Uses the package "gageData" and within that  data(kegg.sets.hs) and data(sigmet.idx.hs) for entrez to pathway mapping 
+
+```{r Gene-set_Enrichment_for_Pathway_Analysis}
+library(pathview)
+library(gage)
+library(gageData)
+data(kegg.sets.hs)
+data(sigmet.idx.hs)
+kegg.sets.hs = kegg.sets.hs[sigmet.idx.hs]
+head(kegg.sets.hs)
+
+
+#Take the entrez and DegRespective entrez ids
+foldchanges = DegRes$log2FoldChange
+names(foldchanges) = DegRes$entrez
+head(foldchanges)
+
+keggResults = gage(foldchanges, gsets=kegg.sets.hs, same.dir= TRUE)
+lapply(keggResults, head)
+```
+
+
+Extract top 5 greater Kegg Pathways 
+
+
+```{r plot_GreaterKeggPathwayGeneExpression}
+# Get the pathways
+keggRespathways = data.frame(id=rownames(keggResults$greater), keggResults$greater) %>% 
+  tbl_df() %>% 
+  filter(row_number()<=5) %>% 
+  .$id %>% 
+  as.character()
+keggRespathways
+# Get the IDs.
+keggresids = substr(keggRespathways, start=1, stop=8)
+keggresids
+```
+
+
+
+Using pathview to view top pathways
+```{r top5_Pathview}
+# Define plotting function for applying later
+plot_pathway = function(pid) pathview(gene.data=foldchanges, pathway.id=pid, species="hsa", new.signature=FALSE)
+
+# plot multiple pathways (plots saved to disk and returns a throwaway list object)
+tmp = sapply(keggresids, function(pid) pathview(gene.data=foldchanges, pathway.id=pid, species="hsa"))
+
+```
+
+
+Extract bottom 5 less Kegg Pathways 
+
+```{r plot_LessKeggPathwayGeneExpression}
+# Get the pathways
+keggRespathways = data.frame(id=rownames(keggResults$less), keggResults$less) %>% 
+  tbl_df() %>% 
+  filter(row_number()<=5) %>% 
+  .$id %>% 
+  as.character()
+keggRespathways
+keggresids = substr(keggRespathways, start=1, stop=8)
+keggresids
+```
+
+
+Using pathview to view bottom pathways
+```{r bottom5_Pathview}
+plot_pathway = function(pid) pathview(gene.data=foldchanges, pathway.id=pid, species="hsa", new.signature=FALSE)
+
+# plot multiple pathways (plots saved to disk and returns a throwaway list object)
+tmp = sapply(keggresids, function(pid) pathview(gene.data=foldchanges, pathway.id=pid, species="hsa"))
+
+```
+
+
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
